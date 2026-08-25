@@ -68,6 +68,37 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(j.unrenderable("plain ascii ?"), "")  # a literal ? is not a loss
 
 
+def solid_png(width: int, height: int) -> bytes:
+    row = b"\x00" + bytes((10, 20, 30)) * width
+    return make_png(width, height, [row] * height)
+
+
+class PhotoRowTests(unittest.TestCase):
+    def row(self, sizes: list[tuple[int, int]]) -> list[float]:
+        with tempfile.TemporaryDirectory() as tmp:
+            pictures = []
+            for i, (w, h) in enumerate(sizes):
+                path = Path(tmp) / f"{i}.png"
+                path.write_bytes(solid_png(w, h))
+                pictures.append(pdfa.load_image(path))
+            sheet = pdfa.Sheet(j.journal_fonts())
+            entry = j.Entry(sheet, "Title", "Monday · 2026-08-25")
+            entry.photos(pictures)
+        return [float(op.split()[1]) for op in sheet.ops if op.startswith("q ") and " Do Q" in op]
+
+    def test_a_single_image_spans_the_body_width(self) -> None:
+        widths = self.row([(4, 2)])
+        self.assertEqual(len(widths), 1)
+        self.assertAlmostEqual(widths[0], pdfa.BODY_W, places=1)
+
+    def test_three_images_share_one_row_of_equal_columns(self) -> None:
+        widths = self.row([(4, 2), (2, 4), (3, 3)])  # landscape, portrait, square
+        self.assertEqual(len(widths), 3)
+        for width in widths:
+            self.assertAlmostEqual(width, widths[0], places=2)  # equal columns
+        self.assertAlmostEqual(sum(widths) + 2 * j.IMAGE_GAP, pdfa.BODY_W, places=1)  # fills the row
+
+
 class BuildPdfTests(unittest.TestCase):
     def test_long_content_flows_onto_several_pages(self) -> None:
         content = [f"Paragraph {i}. " + "sentence here. " * 40 for i in range(30)]
@@ -87,6 +118,18 @@ class BuildPdfTests(unittest.TestCase):
             data = path.read_bytes()
         self.assertIn(b"Seaside", data)  # plain text in the XMP dc:title
         self.assertIn(b"2026-08-25", data)
+
+    def test_the_body_is_set_in_the_embedded_serif_face(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.pdf"
+            j.build_pdf(path, "2026-08-25", "Prose", ["the body text here"], [])
+            data = path.read_bytes()
+        self.assertIn(b"/BaseFont /DejaVuSerif", data)  # serif embedded
+        streams = []
+        for match in data.split(b"/Filter /FlateDecode /Length")[1:]:
+            streams.append(zlib.decompressobj().decompress(match.split(b"stream\n", 1)[1]))
+        serif_id = f"/F{list(j.journal_fonts()).index(j.BODY_FONT) + 1}".encode()
+        self.assertIn(serif_id, b"".join(streams))  # body actually uses it
 
     def test_the_file_is_written_owner_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

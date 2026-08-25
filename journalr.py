@@ -16,9 +16,11 @@ from pdfa import (
     GRAY,
     MARGIN,
     PAGE_H,
+    EmbeddedFont,
     JpegImage,
     RasterImage,
     Sheet,
+    find_font,
     load_fonts,
     load_image,
     write_private,
@@ -26,6 +28,12 @@ from pdfa import (
 
 PRODUCER = "journalr.py"
 ENTRIES_DIR = Path(__file__).parent / "entries"
+# Long-form prose reads more comfortably set in a serif; the title and labels
+# stay in the sans faces. Serif is loaded only here, so the recovery sheets that
+# share pdfa.py do not embed a font they never use.
+SERIF_FILES = ("DejaVuSerif.ttf", "LiberationSerif-Regular.ttf")
+BODY_FONT = "serif"
+IMAGE_GAP = 10.0
 
 DATE_SIZE = 8.5
 TITLE_SIZE = 20.0
@@ -120,33 +128,41 @@ class Entry:
             if not raw.strip():
                 self.y += BODY_LEADING * 0.55
                 continue
-            for segment in wrap_text(self.sheet, raw, "sans", BODY_SIZE, BODY_W):
+            for segment in wrap_text(self.sheet, raw, BODY_FONT, BODY_SIZE, BODY_W):
                 self.reserve(BODY_LEADING)
-                self.sheet.text(MARGIN, self.y, segment, "sans", BODY_SIZE, BLACK)
+                self.sheet.text(MARGIN, self.y, segment, BODY_FONT, BODY_SIZE, BLACK)
                 self.y += BODY_LEADING
 
     def photos(self, pictures: list[RasterImage | JpegImage]) -> None:
+        """Lay the images out as a single row of equal-width columns: one image
+        spans the body, two or three split it evenly. Heights follow each image's
+        aspect ratio, so the row is top-aligned with a common column width."""
         if not pictures:
             return
+        count = len(pictures)
+        column = (BODY_W - IMAGE_GAP * (count - 1)) / count
+        heights = [column * p.display_height / p.display_width for p in pictures]
+        # Keep the row (plus its rule and label) inside one page's height.
+        headroom = CONTENT_BOTTOM - CONTENT_TOP - 32
+        scale = min(1.0, headroom / max(heights))
+        column *= scale
+        heights = [height * scale for height in heights]
+        row_height = max(heights)
+
         self.y += 8
-        self.reserve(30)
+        if self.y + 32 + row_height > CONTENT_BOTTOM:
+            self.continue_page()
         self.sheet.rule(MARGIN, self.y, BODY_W, 0.7, GRAY)
         self.y += 16
-        label = "1 IMAGE" if len(pictures) == 1 else f"{len(pictures)} IMAGES"
+        label = "1 IMAGE" if count == 1 else f"{count} IMAGES"
         self.sheet.text(MARGIN, self.y, label, "sans-bold", DATE_SIZE, GRAY)
         self.y += 16
-        page_height = CONTENT_BOTTOM - CONTENT_TOP
-        for picture in pictures:
-            width = BODY_W
-            height = width * picture.height / picture.width
-            if height > page_height:
-                height = page_height
-                width = height * picture.width / picture.height
-            if self.y + height > CONTENT_BOTTOM:
-                self.continue_page()
-            x = MARGIN + (BODY_W - width) / 2
-            self.sheet.draw_image(picture, x, self.y, height)
-            self.y += height + 12
+        total = count * column + IMAGE_GAP * (count - 1)
+        left = MARGIN + (BODY_W - total) / 2
+        top = self.y
+        for index, (picture, height) in enumerate(zip(pictures, heights)):
+            self.sheet.draw_image(picture, left + index * (column + IMAGE_GAP), top, height)
+        self.y = top + row_height + 12
 
 
 def add_footers(sheet: Sheet, iso_date: str) -> None:
@@ -162,6 +178,12 @@ def add_footers(sheet: Sheet, iso_date: str) -> None:
     sheet.ops = saved
 
 
+def journal_fonts() -> dict[str, EmbeddedFont]:
+    fonts = load_fonts()
+    fonts[BODY_FONT] = find_font(SERIF_FILES)
+    return fonts
+
+
 def build_pdf(
     path: Path,
     iso_date: str,
@@ -170,7 +192,7 @@ def build_pdf(
     pictures: list[RasterImage | JpegImage],
 ) -> None:
     weekday = datetime.strptime(iso_date, "%Y-%m-%d").strftime("%A")
-    sheet = Sheet(load_fonts())
+    sheet = Sheet(journal_fonts())
     entry = Entry(sheet, title, f"{weekday} · {iso_date}")
     entry.body(content)
     entry.photos(pictures)

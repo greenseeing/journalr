@@ -164,23 +164,20 @@ class EmbeddedFont:
         return total * size / 1000
 
 
+def find_font(names: tuple[str, ...]) -> EmbeddedFont:
+    for directory in FONT_DIRS:
+        for name in names:
+            path = Path(directory) / name
+            if path.is_file():
+                return EmbeddedFont(path)
+    raise SystemExit(
+        f"No font found for {names}. PDF/A must embed its fonts — install "
+        "fonts-dejavu-core (Debian, and present on Tails) or fonts-liberation."
+    )
+
+
 def load_fonts() -> dict[str, EmbeddedFont]:
-    fonts = {}
-    for key, names in FONT_FILES.items():
-        for directory in FONT_DIRS:
-            for name in names:
-                path = Path(directory) / name
-                if path.is_file():
-                    fonts[key] = EmbeddedFont(path)
-                    break
-            if key in fonts:
-                break
-        if key not in fonts:
-            raise SystemExit(
-                f"No font found for {names}. PDF/A must embed its fonts — install "
-                "fonts-dejavu-core (Debian, and present on Tails) or fonts-liberation."
-            )
-    return fonts
+    return {key: find_font(names) for key, names in FONT_FILES.items()}
 
 
 class JpegImage:
