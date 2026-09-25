@@ -35,9 +35,11 @@ ENTRIES_DIR = Path(__file__).parent / "entries"
 SERIF_FILES = ("DejaVuSerif.ttf", "LiberationSerif-Regular.ttf")
 BODY_FONT = "serif"
 IMAGE_GAP = 10.0
-# A lone BACK reopens the previous content line: the terminal hands input() one
-# finished line at a time, so Backspace alone can never cross a line break.
-BACK = "^"
+# The terminal hands input() one finished line at a time, so Backspace can never
+# cross a line break; "^N" on its own line reopens the line N up instead.
+REOPEN = re.compile(r"\^([1-9][0-9]*)?")
+LIST_RECENT = "^?"
+RECENT_SHOWN = 9
 
 DATE_SIZE = 8.5
 TITLE_SIZE = 20.0
@@ -235,24 +237,38 @@ def read_line(prefill: str = "") -> str:
 
 def ask_content() -> list[str]:
     print("[3] Content — write your entry; finish with a single '.' on its own line (or Ctrl-D).")
-    print(f"    A single '{BACK}' on its own line reopens the previous line for editing.")
+    print("    On its own line: '^' reopens the last line, '^3' the line 3 up, '^?' lists recent lines.")
+    print("    Clear a reopened line to delete it.")
     while True:
         lines: list[str] = []
-        prefill = ""
+        editing: int | None = None
         while True:
             try:
-                line = read_line(prefill)
+                line = read_line("" if editing is None else lines[editing])
             except EOFError:
                 print()
                 break
-            prefill = ""
-            if line.strip() == ".":
+            target, editing = editing, None
+            command = line.strip()
+            if command == ".":
                 break
-            if line.strip() == BACK:
-                if lines:
-                    prefill = lines.pop()
+            if command == LIST_RECENT:
+                for up in range(min(RECENT_SHOWN, len(lines)), 0, -1):
+                    print(f"    ^{up}  {lines[-up]}")
                 continue
-            lines.append(line)
+            if reopen := REOPEN.fullmatch(command):
+                up = int(reopen[1] or 1)
+                if up <= len(lines):
+                    editing = len(lines) - up
+                else:
+                    print(f"    Only {len(lines)} line(s) so far.")
+                continue
+            if target is None:
+                lines.append(line)
+            elif command or not lines[target].strip():
+                lines[target] = line
+            else:
+                del lines[target]
         while lines and not lines[-1].strip():
             lines.pop()
         if any(line.strip() for line in lines):

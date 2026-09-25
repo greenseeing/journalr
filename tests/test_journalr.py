@@ -157,31 +157,75 @@ class BuildPdfTests(unittest.TestCase):
 
 
 class ContentInputTests(unittest.TestCase):
-    def ask(self, typed: list[str]) -> tuple[list[str], list[str]]:
+    def ask(self, typed: list[str | None]) -> tuple[list[str], list[str], list[str]]:
         prefills: list[str] = []
         replies = iter(typed)
 
         def read_line(prefill: str = "") -> str:
             prefills.append(prefill)
-            return next(replies)
+            reply = next(replies)
+            if reply is None:
+                raise EOFError
+            return reply
 
-        with mock.patch.object(j, "read_line", read_line), mock.patch("builtins.print"):
-            return j.ask_content(), prefills
+        with mock.patch.object(j, "read_line", read_line), mock.patch("builtins.print") as printed:
+            lines = j.ask_content()
+        return lines, prefills, [" ".join(map(str, call.args)) for call in printed.call_args_list]
 
-    def test_back_reopens_the_previous_line_for_editing(self) -> None:
-        lines, prefills = self.ask(["one", "twoo", "^", "two", "."])
+    def test_back_reopens_the_last_line_for_editing(self) -> None:
+        lines, prefills, _ = self.ask(["one", "twoo", "^", "two", "."])
         self.assertEqual(lines, ["one", "two"])
         self.assertEqual(prefills, ["", "", "", "twoo", ""])
 
-    def test_repeated_back_walks_up_deleting_like_backspace(self) -> None:
-        lines, prefills = self.ask(["one", "two", "^", "^", "uno", "."])
-        self.assertEqual(lines, ["uno"])
-        self.assertEqual(prefills[3:5], ["two", "one"])
+    def test_back_n_edits_an_older_line_in_place_and_resumes_at_the_end(self) -> None:
+        lines, prefills, _ = self.ask(["one", "twoo", "three", "^2", "two", "four", "."])
+        self.assertEqual(lines, ["one", "two", "three", "four"])
+        self.assertEqual(prefills[4:6], ["twoo", ""])
 
-    def test_back_on_the_first_line_does_nothing(self) -> None:
-        lines, prefills = self.ask(["^", "one", "."])
+    def test_clearing_a_reopened_line_deletes_it(self) -> None:
+        lines, _, _ = self.ask(["one", "oops", "two", "^2", "", "."])
+        self.assertEqual(lines, ["one", "two"])
+
+    def test_a_reopened_blank_line_stays_blank(self) -> None:
+        lines, _, _ = self.ask(["one", "", "two", "^2", "", "."])
+        self.assertEqual(lines, ["one", "", "two"])
+
+    def test_a_command_while_editing_leaves_the_line_unchanged(self) -> None:
+        lines, prefills, _ = self.ask(["one", "two", "^2", "^", "dos", "."])
+        self.assertEqual(lines, ["one", "dos"])
+        self.assertEqual(prefills[3:5], ["one", "two"])
+
+    def test_finishing_while_editing_keeps_the_line(self) -> None:
+        lines, _, _ = self.ask(["one", "two", "^", "."])
+        self.assertEqual(lines, ["one", "two"])
+
+    def test_listing_while_editing_abandons_the_edit(self) -> None:
+        lines, _, _ = self.ask(["one", "two", "^", "^?", "three", "."])
+        self.assertEqual(lines, ["one", "two", "three"])
+
+    def test_deleting_the_only_line_asks_for_content_again(self) -> None:
+        lines, _, printed = self.ask(["oops", "^", "", ".", "real", "."])
+        self.assertEqual(lines, ["real"])
+        self.assertIn("    Content cannot be empty, please write something.", printed)
+
+    def test_end_of_input_while_editing_keeps_the_line(self) -> None:
+        lines, _, _ = self.ask(["one", "two", "^", None])
+        self.assertEqual(lines, ["one", "two"])
+
+    def test_back_beyond_the_first_line_changes_nothing(self) -> None:
+        lines, prefills, printed = self.ask(["^", "one", "^2", "."])
         self.assertEqual(lines, ["one"])
-        self.assertEqual(prefills, ["", "", ""])
+        self.assertEqual(prefills, ["", "", "", ""])
+        self.assertIn("    Only 1 line(s) so far.", printed)
+
+    def test_list_shows_recent_lines_numbered_by_distance(self) -> None:
+        _, _, printed = self.ask(["one", "two", "^?", "."])
+        self.assertIn("    ^2  one", printed)
+        self.assertIn("    ^1  two", printed)
+
+    def test_carets_inside_text_are_content(self) -> None:
+        lines, _, _ = self.ask(["^_^", "x^2", "^0", "^\u0662", "."])
+        self.assertEqual(lines, ["^_^", "x^2", "^0", "^\u0662"])
 
 
 if __name__ == "__main__":
