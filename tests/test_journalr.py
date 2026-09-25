@@ -3,6 +3,7 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
+from unittest import mock
 
 import journalr as j
 import pdfa
@@ -153,6 +154,34 @@ class BuildPdfTests(unittest.TestCase):
         joined = b"".join(streams)
         self.assertIn(f"({count} / {count})".encode(), joined)
         self.assertIn(b"(1 / %d)" % count, joined)
+
+
+class ContentInputTests(unittest.TestCase):
+    def ask(self, typed: list[str]) -> tuple[list[str], list[str]]:
+        prefills: list[str] = []
+        replies = iter(typed)
+
+        def read_line(prefill: str = "") -> str:
+            prefills.append(prefill)
+            return next(replies)
+
+        with mock.patch.object(j, "read_line", read_line), mock.patch("builtins.print"):
+            return j.ask_content(), prefills
+
+    def test_back_reopens_the_previous_line_for_editing(self) -> None:
+        lines, prefills = self.ask(["one", "twoo", "^", "two", "."])
+        self.assertEqual(lines, ["one", "two"])
+        self.assertEqual(prefills, ["", "", "", "twoo", ""])
+
+    def test_repeated_back_walks_up_deleting_like_backspace(self) -> None:
+        lines, prefills = self.ask(["one", "two", "^", "^", "uno", "."])
+        self.assertEqual(lines, ["uno"])
+        self.assertEqual(prefills[3:5], ["two", "one"])
+
+    def test_back_on_the_first_line_does_nothing(self) -> None:
+        lines, prefills = self.ask(["^", "one", "."])
+        self.assertEqual(lines, ["one"])
+        self.assertEqual(prefills, ["", "", ""])
 
 
 if __name__ == "__main__":

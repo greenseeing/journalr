@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import re
+import readline
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,9 @@ ENTRIES_DIR = Path(__file__).parent / "entries"
 SERIF_FILES = ("DejaVuSerif.ttf", "LiberationSerif-Regular.ttf")
 BODY_FONT = "serif"
 IMAGE_GAP = 10.0
+# A lone BACK reopens the previous content line: the terminal hands input() one
+# finished line at a time, so Backspace alone can never cross a line break.
+BACK = "^"
 
 DATE_SIZE = 8.5
 TITLE_SIZE = 20.0
@@ -221,18 +225,33 @@ def ask_title() -> str:
         print("    Cannot be empty.")
 
 
+def read_line(prefill: str = "") -> str:
+    readline.set_startup_hook(lambda: readline.insert_text(prefill))
+    try:
+        return input()
+    finally:
+        readline.set_startup_hook()
+
+
 def ask_content() -> list[str]:
-    print("[3] Content — write your entry; finish with a single '.' on its own line (or Ctrl-D):")
+    print("[3] Content — write your entry; finish with a single '.' on its own line (or Ctrl-D).")
+    print(f"    A single '{BACK}' on its own line reopens the previous line for editing.")
     while True:
         lines: list[str] = []
+        prefill = ""
         while True:
             try:
-                line = input()
+                line = read_line(prefill)
             except EOFError:
                 print()
                 break
+            prefill = ""
             if line.strip() == ".":
                 break
+            if line.strip() == BACK:
+                if lines:
+                    prefill = lines.pop()
+                continue
             lines.append(line)
         while lines and not lines[-1].strip():
             lines.pop()
